@@ -1,0 +1,67 @@
+# Commands that write but take no --yes flag, keyed by repo name.
+#
+# `outward` changes something other people or services see (a message, a page, a
+# sheet, a like): MCP clients are told it is destructive and ask before running it.
+# `local` only writes on this machine (downloads, caches, the secret vault): not
+# read-only, but harmless. A command with a --yes flag is a write without being
+# listed here. Paths are the subcommand words joined by spaces.
+
+[deezer-cli]
+outward = ["like", "unlike", "playlist-create", "playlist-add", "playlist-remove", "playlist-delete"]
+local = ["export-likes", "download", "auth-sync"]
+
+[ecoledirecte-cli]
+outward = ["mark"]
+local = ["download", "auth-sync"]
+
+[email-cli]
+local = ["auth-sync"]
+
+[fbarchive-cli]
+local = ["import"]
+
+[gdrive-cli]
+outward = ["drive rename", "drive import", "sheets write", "sheets write-formula", "sheets batch-write", "sheets clear"]
+local = ["auth-sync", "drive download"]
+
+[laposte-cli]
+outward = ["send"]
+local = ["auth-sync"]
+
+[macos-osascript-cli]
+outward = ["run", "tell"]
+
+[milibris-cli]
+local = ["set-host"]
+
+[myoralia-cli]
+local = ["documents download", "documents sync"]
+
+[notion-cli]
+outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment"]
+local = ["cache clear", "auth-sync", "agents pull"]
+
+[one-conv-cli]
+outward = ["live join", "live leave", "live stop"]
+local = ["chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull", "tune cloud pull", "live pull", "hr sync"]
+
+[oz-audits-cli]
+outward = ["submit"]
+local = ["auth-sync"]
+
+[refero-cli]
+local = ["pull"]
+
+[rentalready-cli]
+local = ["auth-sync"]
+
+[slack-user-cli]
+outward = ["send", "draft", "draft-delete", "upload", "dm-upload", "canvas-edit"]
+local = ["download", "auth-sync", "default", "refresh"]
+
+[tg-cli]
+local = ["download", "auth-sync"]
+
+[whatsapp-cli]
+outward = ["send"]
+local = ["import-contacts", "download", "pull", "sync", "setup", "auth-sync"]
