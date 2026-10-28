@@ -98,6 +98,11 @@ jobs:
         run: |
           for s in $SIBLINGS; do git clone --quiet --depth 1 "https://github.com/$OWNER/$s.git" "$s"; done
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      # Reading the CLI's commands syncs its own environment, which builds those requirements again.
+      - if: needs.plan.outputs.wheels == 'true'
+        run: |
+          brew install protobuf
+          echo "PROTOC=$(brew --prefix protobuf)/bin/protoc" >> "$GITHUB_ENV"
       - if: needs.plan.outputs.wheels == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
