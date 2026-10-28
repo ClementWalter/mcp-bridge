@@ -392,6 +392,13 @@ def test_wheel_sources_require_a_wheel(tmp_path):
         mb.wheel_sources(["signal-protocol==0.2.2"], tmp_path)
 
 
+def test_build_wheels_uses_a_single_architecture_python(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(mb, "run", calls.append)
+    mb.build_wheels(["signal-protocol==0.2.2"], tmp_path)
+    assert "--managed-python" in calls[0]
+
+
 def test_stage_leaves_out_overrides_file(staged):
     assert not (staged / "cli" / "demo-cli" / "mcpb.json").exists()
 

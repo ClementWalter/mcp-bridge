@@ -491,7 +491,9 @@ def build_wheels(requirements: list[str], dest: Path) -> None:
     """Build, for this machine, wheels of requirements PyPI only ships as sdists."""
     dest.mkdir(parents=True, exist_ok=True)
     for req in requirements:
-        run(["uv", "run", "--no-project", "--python", BUNDLE_PYTHON, "--with", "pip==25.3", "python", "-m", "pip",
+        # uv's own single-architecture Python: a python.org framework build tags the wheel
+        # universal2 although it is compiled for this machine only.
+        run(["uv", "run", "--no-project", "--managed-python", "--python", BUNDLE_PYTHON, "--with", "pip==25.3", "python", "-m", "pip",
              "wheel", "--no-deps", "--no-binary", dist_name(req), "--wheel-dir", str(dest), req])
 
 
