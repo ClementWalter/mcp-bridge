@@ -61,8 +61,9 @@ RESERVED = frozenset({"--help", "--json", "--yes"})
 WRITES = tomllib.loads((BRIDGE.parent / "writes.toml").read_text())
 # Leaf names that usually mean a write; `audit` flags them when writes.toml misses them.
 WRITE_VERBS = re.compile(
-    r"^draft$|^(add|append|archive|clear|comment|create|delete|download|edit|import|like|mark|move|post|pull|"
-    r"react|remove|rename|reply|save|send|set|submit|sync|unlike|update|upload|write)(-|$)|-(add|delete|edit|remove|sync|upload|write)$"
+    r"^draft$|^(add|append|apply|archive|check|clear|comment|connect|create|delete|download|dump|edit|export|import|"
+    r"like|link|mark|move|pdf|post|pull|react|remove|rename|reply|resolve|rewrite|save|send|set|submit|sync|unlike|"
+    r"update|upload|write)(-|$)|-(add|delete|edit|remove|sync|upload|write)$"
 )
 MAX_OUTPUT = 200_000
 STDERR_TAIL = 4_000
@@ -160,8 +161,13 @@ def introspect(cli: Cli) -> list[dict]:
     return commands
 
 
-def exposed(commands: list[dict]) -> list[dict]:
-    return [c for c in commands if not c["hidden"] and not EXCLUDED & set(c["path"])]
+# Sync to the user's own secret vault, which an extension's users do not have.
+BUNDLED_EXCLUDED = frozenset({"auth-sync"})
+
+
+def exposed(commands: list[dict], bundled: bool = False) -> list[dict]:
+    excluded = EXCLUDED | BUNDLED_EXCLUDED if bundled else EXCLUDED
+    return [c for c in commands if not c["hidden"] and not excluded & set(c["path"])]
 
 
 def tool_name(path: list[str]) -> str:
@@ -374,7 +380,10 @@ def guide_tool(cli: Cli) -> types.Tool:
 
 def build_server(cli: Cli) -> Server:
     # A CLI command named like the guide would be shadowed by it.
-    commands = {tool_name(c["path"]): c for c in exposed(introspect(cli)) if tool_name(c["path"]) != GUIDE}
+    commands = {
+        tool_name(c["path"]): c for c in exposed(introspect(cli), bundled=cli.python is not None)
+        if tool_name(c["path"]) != GUIDE
+    }
 
     async def list_tools(ctx, params) -> types.ListToolsResult:
         return types.ListToolsResult(tools=[guide_tool(cli), *(tool(cli.writes_key, c) for c in commands.values())])
@@ -500,7 +509,7 @@ def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict
     summary = " ".join(str(meta.get("description", "")).split())
     remote = run(["git", "-C", str(cli.repo), "remote", "get-url", "origin"]).stdout.strip()
     url = re.sub(r"^git@github\.com:", "https://github.com/", remote).removesuffix(".git")
-    commands = exposed(introspect(cli))
+    commands = exposed(introspect(cli), bundled=True)
     out = {
         "manifest_version": "0.4",
         "name": cli.repo.name,
@@ -633,7 +642,8 @@ def audit() -> None:
         for cmd in exposed(introspect(c)):
             path = " ".join(cmd["path"])
             paths.add(path)
-            if access(c.writes_key, cmd) == "read" and WRITE_VERBS.search(cmd["path"][-1]):
+            reviewed = path in WRITES.get(c.writes_key, {}).get("read", [])
+            if access(c.writes_key, cmd) == "read" and not reviewed and WRITE_VERBS.search(cmd["path"][-1]):
                 problems += 1
                 click.echo(f"unlisted  {c.writes_key}: {path}")
     for repo, kinds in WRITES.items():

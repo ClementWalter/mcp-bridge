@@ -200,6 +200,14 @@ def test_interactive_commands_are_not_exposed():
         command(path=("read",))]
 
 
+def test_vault_sync_is_hidden_in_extensions():
+    assert mb.exposed([command(path=("auth-sync",))], bundled=True) == []
+
+
+def test_vault_sync_is_served_locally():
+    assert mb.exposed([command(path=("auth-sync",))]) == [command(path=("auth-sync",))]
+
+
 def test_tool_name_is_mcp_safe():
     assert mb.tool_name(["cloud", "chatgpt-pull"]) == "cloud_chatgpt_pull"
 

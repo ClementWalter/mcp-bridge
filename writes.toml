@@ -3,10 +3,15 @@
 # `outward` changes something other people or services see (a message, a page, a
 # sheet, a like): MCP clients are told it is destructive and ask before running it.
 # `local` only writes on this machine (downloads, caches, the secret vault): not
-# read-only, but harmless. A command with a --yes flag is a write without being
-# listed here. Paths are the subcommand words joined by spaces.
+# read-only, but harmless. `read` lists commands whose name looks like a write but
+# that only read, so `audit` stops flagging them. A command with a --yes flag is a
+# write without being listed here. Paths are the subcommand words joined by spaces.
+
+[bluestar-cli]
+read = ["check"]
 
 [deezer-cli]
+read = ["resolve"]
 outward = ["like", "unlike", "playlist-create", "playlist-add", "playlist-remove", "playlist-delete"]
 local = ["export-likes", "download", "auth-sync"]
 
@@ -26,6 +31,7 @@ local = ["dump", "pdf", "page"]
 [gdrive-cli]
 outward = ["drive rename", "drive import", "sheets write", "sheets write-formula", "sheets batch-write", "sheets clear"]
 local = ["auth-sync", "drive download"]
+read = ["pipeline pdf-to-table"]
 
 [laposte-cli]
 outward = ["send"]
@@ -41,12 +47,13 @@ local = ["set-host", "dump", "pdf"]
 local = ["documents download", "documents sync", "connect"]
 
 [notion-cli]
-outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment"]
-local = ["cache clear", "auth-sync", "agents pull"]
+outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment", "rewrite", "check", "resolve-discussion", "agents apply"]
+local = ["cache clear", "auth-sync", "agents pull", "agents export", "connect"]
+read = ["resolve"]
 
 [one-conv-cli]
 outward = ["live join", "live leave", "live stop"]
-local = ["chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull", "tune cloud pull", "hr sync"]
+local = ["cloud chatgpt connect", "cloud claude connect", "cloud codex connect", "cloud cowork connect", "chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull", "tune cloud pull", "hr sync"]
 
 [oz-audits-cli]
 outward = ["submit"]
@@ -61,6 +68,7 @@ local = ["auth-sync"]
 [slack-user-cli]
 outward = ["send", "draft", "draft-delete", "upload", "dm-upload", "canvas-edit"]
 local = ["download", "auth-sync", "default", "refresh"]
+read = ["resolve", "resolve-name"]
 
 [tg-cli]
 local = ["download", "auth-sync", "link"]
@@ -68,3 +76,6 @@ local = ["download", "auth-sync", "link"]
 [whatsapp-cli]
 outward = ["send"]
 local = ["import-contacts", "download", "pull", "sync", "setup", "auth-sync", "link"]
+
+[tchoupi-cli]
+local = ["pdf"]
