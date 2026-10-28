@@ -325,6 +325,18 @@ def test_stage_copies_included_sibling_file(demo, monkeypatch):
     assert (root / "cli" / "demo-cli" / "sibling.py").read_text() == "X = 1\n"
 
 
+def test_stage_ships_build_outputs(demo, monkeypatch):
+    repo = demo / "demo-cli"
+    for cmd in (["init", "-q"], ["add", "."], ["remote", "add", "origin", "git@github.com:someone/demo-cli.git"]):
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+    build = {"command": [sys.executable, "-c", "import pathlib; pathlib.Path('dist').mkdir(); pathlib.Path('dist/app.bin').write_text('built')"],
+             "include": ["dist"]}
+    (repo / "mcpb.json").write_text(json.dumps({"build": build}))
+    monkeypatch.setattr(mb, "CACHE_DIR", demo / "cache")
+    root = mb.stage(mb.discover(demo / "bin")["demo-cli"], demo / "build", "1.0.0")
+    assert (root / "cli" / "demo-cli" / "dist" / "app.bin").read_text() == "built"
+
+
 def test_stage_leaves_out_overrides_file(staged):
     assert not (staged / "cli" / "demo-cli" / "mcpb.json").exists()
 

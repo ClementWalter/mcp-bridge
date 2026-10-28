@@ -541,6 +541,21 @@ def stage(cli: Cli, build: Path, version: str) -> Path:
             continue
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(cli.repo / rel, dest / rel)
+    # Build products (gitignored, e.g. a compiled helper app) made in the repo, then shipped at the same path.
+    build_cfg = overrides.get("build")
+    if build_cfg:
+        proc = subprocess.run(build_cfg["command"], cwd=cli.repo, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if proc.returncode:
+            raise click.ClickException(f"{cli.repo.name} build failed:\n{proc.stderr.strip()[-STDERR_TAIL:]}")
+        for rel in build_cfg.get("include", []):
+            src, dst = cli.repo / rel, dest / rel
+            if not src.exists():
+                raise click.ClickException(f"{cli.repo.name} build did not produce {rel}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
     # Files the CLI imports from outside its repo (a sibling checkout); dest is relative to the
     # staged CLI dir, source to the CLI repo.
     for rel_dest, rel_src in overrides.get("include", {}).items():

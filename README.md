@@ -75,6 +75,7 @@ A CLI customizes its extension with an optional `mcpb.json`:
 | `build_wheels`     | Requirements PyPI has no wheel for; built here and shipped    |
 | `icon`             | Path to a PNG in the repo                                     |
 | `include`          | `{"dest": "../source"}`: files from outside the repo to ship  |
+| `build`            | `{"command": [...], "include": [...]}`: run in the repo, ship its outputs |
 
 `build_wheels` compiles for this machine's architecture only (whatsapp-cli's
 `signal-protocol` needs Rust and `PROTOC` pointing at a working `protoc`).
