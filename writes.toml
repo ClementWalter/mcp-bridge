@@ -20,6 +20,9 @@ local = ["auth-sync"]
 [fbarchive-cli]
 local = ["import"]
 
+[franc-tireur-cli]
+local = ["dump", "pdf", "page"]
+
 [gdrive-cli]
 outward = ["drive rename", "drive import", "sheets write", "sheets write-formula", "sheets batch-write", "sheets clear"]
 local = ["auth-sync", "drive download"]
@@ -32,10 +35,10 @@ local = ["auth-sync"]
 outward = ["run", "tell"]
 
 [milibris-cli]
-local = ["set-host"]
+local = ["set-host", "dump", "pdf"]
 
 [myoralia-cli]
-local = ["documents download", "documents sync"]
+local = ["documents download", "documents sync", "connect"]
 
 [notion-cli]
 outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment"]
