@@ -370,6 +370,27 @@ def test_stage_ships_build_outputs(demo, monkeypatch):
     assert (root / "cli" / "demo-cli" / "dist" / "app.bin").read_text() == "built"
 
 
+def test_stage_links_the_privacy_policy(staged):
+    assert json.loads((staged / "manifest.json").read_text())["privacy_policies"] == [mb.PRIVACY_POLICY]
+
+
+@pytest.fixture
+def two_arch_wheels(tmp_path):
+    for arch in ("arm64", "x86_64"):
+        (tmp_path / f"signal_protocol-0.2.2-cp311-cp311-macosx_11_0_{arch}.whl").write_bytes(b"")
+    return tmp_path
+
+
+def test_wheel_sources_cover_both_macs(two_arch_wheels):
+    out = mb.wheel_sources(["signal-protocol==0.2.2"], two_arch_wheels)
+    assert out.count("platform_machine") == 2
+
+
+def test_wheel_sources_require_a_wheel(tmp_path):
+    with pytest.raises(mb.click.ClickException):
+        mb.wheel_sources(["signal-protocol==0.2.2"], tmp_path)
+
+
 def test_stage_leaves_out_overrides_file(staged):
     assert not (staged / "cli" / "demo-cli" / "mcpb.json").exists()
 

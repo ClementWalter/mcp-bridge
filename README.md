@@ -77,8 +77,14 @@ A CLI customizes its extension with an optional `mcpb.json`:
 | `include`          | `{"dest": "../source"}`: files from outside the repo to ship  |
 | `build`            | `{"command": [...], "include": [...]}`: run in the repo, ship its outputs |
 
-`build_wheels` compiles for this machine's architecture only (whatsapp-cli's
-`signal-protocol` needs Rust and `PROTOC` pointing at a working `protoc`).
+`build_wheels` compiles for this machine's architecture unless `pack --wheels
+DIR` is given prebuilt wheels; `mcp-bridge wheels <cli> --out DIR` builds them,
+so CI runs it on an Apple Silicon and an Intel runner and packs one extension
+that serves both (whatsapp-cli's `signal-protocol` needs Rust and `PROTOC`
+pointing at a working `protoc`).
+
+Every manifest links the shared privacy policy (`privacy_policies`), which the
+extension directory requires.
 
 ## Configuration
 

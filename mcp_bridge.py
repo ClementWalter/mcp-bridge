@@ -29,7 +29,6 @@ import asyncio
 import json
 import logging
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -450,6 +449,7 @@ MCPB = "@anthropic-ai/mcpb@2.1.2"
 # One interpreter for every extension: a fresh uv picks the newest Python, which can
 # lack wheels for a pinned dependency and fall back to a source build the user cannot run.
 BUNDLE_PYTHON = "3.11"
+PRIVACY_POLICY = "https://clementwalter.github.io/claude-extensions/privacy/"
 # Not shipped in an extension: dev tooling, CI, tests.
 PACK_SKIP = re.compile(r"^(tests/|\.github/|\.pre-commit-config\.yaml$|\.privacy-guard-allow$|\.gitignore$|uv\.lock$|mcpb\.json$)")
 
@@ -487,17 +487,31 @@ def merged_dependencies(cli: Cli) -> tuple[list[str], str | None]:
     return cli_deps + bridge, cutoff
 
 
-def build_wheels(requirements: list[str], dest: Path) -> dict[str, str]:
-    """Build wheels for requirements PyPI only ships as sdists here; package name -> wheel path."""
+def build_wheels(requirements: list[str], dest: Path) -> None:
+    """Build, for this machine, wheels of requirements PyPI only ships as sdists."""
     dest.mkdir(parents=True, exist_ok=True)
-    built = {}
     for req in requirements:
-        before = set(dest.iterdir())
         run(["uv", "run", "--no-project", "--python", BUNDLE_PYTHON, "--with", "pip==25.3", "python", "-m", "pip",
              "wheel", "--no-deps", "--no-binary", dist_name(req), "--wheel-dir", str(dest), req])
-        (wheel,) = set(dest.iterdir()) - before
-        built[dist_name(req)] = f"wheels/{wheel.name}"
-    return built
+
+
+def wheel_sources(requirements: list[str], wheels: Path) -> str:
+    """[tool.uv.sources] pointing each requirement at its wheel per macOS architecture."""
+    out = ""
+    for req in requirements:
+        name = dist_name(req)
+        found = sorted(w for w in wheels.glob("*.whl") if dist_name(w.name.split("-")[0]) == name)
+        if not found:
+            raise click.ClickException(f"no wheel for {req} in {wheels}")
+        entries = []
+        for w in found:
+            machine = "arm64" if w.name.endswith("_arm64.whl") else "x86_64" if w.name.endswith("_x86_64.whl") else None
+            if machine is None:
+                raise click.ClickException(f"{w.name}: only macOS arm64 / x86_64 wheels are supported")
+            marker = f"sys_platform == 'darwin' and platform_machine == '{machine}'"
+            entries.append(f'{{ path = "wheels/{w.name}", marker = "{marker}" }}')
+        out += f"{name} = [{', '.join(entries)}]\n"
+    return out
 
 
 def toml_list(items: list[str]) -> str:
@@ -520,6 +534,7 @@ def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict
         "author": {"name": "Clément Walter", "url": "https://github.com/ClementWalter"},
         "repository": {"type": "git", "url": url},
         "homepage": url,
+        "privacy_policies": [PRIVACY_POLICY],
         "server": {
             "type": "uv",
             "entry_point": "mcp_bridge.py",
@@ -544,7 +559,7 @@ def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict
     return out
 
 
-def stage(cli: Cli, build: Path, version: str) -> Path:
+def stage(cli: Cli, build: Path, version: str, prebuilt: Path | None = None) -> Path:
     """Lay out an extension directory: bridge, the CLI's tracked files, pyproject, lock, manifest."""
     overrides_file = cli.repo / "mcpb.json"
     overrides = json.loads(overrides_file.read_text()) if overrides_file.is_file() else {}
@@ -588,13 +603,17 @@ def stage(cli: Cli, build: Path, version: str) -> Path:
     pyproject += f"dependencies = {toml_list(deps)}\n"
     if cutoff:
         pyproject += f'\n[tool.uv]\nexclude-newer = "{cutoff}"\n'
-    wheels = build_wheels(overrides.get("build_wheels", []), root / "wheels")
-    if wheels:
-        machine = platform.machine()
-        pyproject += "\n[tool.uv.sources]\n" + "".join(
-            f'{name} = {{ path = "{path}", marker = "sys_platform == \'darwin\' and platform_machine == \'{machine}\'" }}\n'
-            for name, path in wheels.items()
-        )
+    needs_wheels = overrides.get("build_wheels", [])
+    if needs_wheels:
+        # Prebuilt wheels (one per architecture, from CI) make one extension serve every Mac;
+        # without them, this machine's architecture is built.
+        if prebuilt:
+            (root / "wheels").mkdir()
+            for w in prebuilt.glob("*.whl"):
+                shutil.copy2(w, root / "wheels" / w.name)
+        else:
+            build_wheels(needs_wheels, root / "wheels")
+        pyproject += "\n[tool.uv.sources]\n" + wheel_sources(needs_wheels, root / "wheels")
     (root / "pyproject.toml").write_text(pyproject)
     (root / ".python-version").write_text(BUNDLE_PYTHON + "\n")
     run(["uv", "lock", "--directory", str(root)])
@@ -703,14 +722,29 @@ def serve(name: str, bundled: bool) -> None:
 @click.argument("name")
 @click.option("--version", "version", required=True, help="Extension version (semver).")
 @click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=Path("dist"), show_default=True)
-def pack(name: str, version: str, out: Path) -> None:
+@click.option("--wheels", "prebuilt", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Prebuilt wheels for mcpb.json build_wheels (all architectures); default builds for this Mac.")
+def pack(name: str, version: str, out: Path, prebuilt: Path | None) -> None:
     """Build a Claude Desktop extension (.mcpb) that serves one CLI, installable without a terminal."""
     target = resolve(name)
-    root = stage(target, out / "build", version)
+    root = stage(target, out / "build", version, prebuilt)
     bundle = out / f"{target.name}-{version}.mcpb"
     run(["npx", "-y", MCPB, "validate", str(root / "manifest.json")])
     run(["npx", "-y", MCPB, "pack", str(root), str(bundle)])
     click.echo(str(bundle))
+
+
+@cli.command("wheels", epilog="\b\nExamples:\n  mcp-bridge wheels whatsapp-cli-wa --out wheels/")
+@click.argument("name")
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), required=True)
+def wheels_cmd(name: str, out: Path) -> None:
+    """Build, for this Mac's architecture, the wheels a CLI's mcpb.json lists in build_wheels."""
+    target = resolve(name)
+    overrides_file = target.repo / "mcpb.json"
+    needed = json.loads(overrides_file.read_text()).get("build_wheels", []) if overrides_file.is_file() else []
+    build_wheels(needed, out)
+    for w in sorted(out.glob("*.whl")):
+        click.echo(str(w))
 
 
 @cli.command(epilog="\b\nExamples:\n  mcp-bridge install\n  mcp-bridge install --yes")
