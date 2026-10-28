@@ -727,11 +727,75 @@ def serve(name: str, bundled: bool) -> None:
 def pack(name: str, version: str, out: Path, prebuilt: Path | None) -> None:
     """Build a Claude Desktop extension (.mcpb) that serves one CLI, installable without a terminal."""
     target = resolve(name)
-    root = stage(target, out / "build", version, prebuilt)
-    bundle = out / f"{target.name}-{version}.mcpb"
+    click.echo(str(build_bundle(target, version, out / f"{target.name}-{version}.mcpb", prebuilt)))
+
+
+def build_bundle(target: Cli, version: str, bundle: Path, prebuilt: Path | None = None) -> Path:
+    root = stage(target, bundle.parent / "build", version, prebuilt)
     run(["npx", "-y", MCPB, "validate", str(root / "manifest.json")])
     run(["npx", "-y", MCPB, "pack", str(root), str(bundle)])
+    return bundle
+
+
+def github_slug(repo: Path) -> str:
+    """`owner/name` of the repo's GitHub origin."""
+    remote = run(["git", "-C", str(repo), "remote", "get-url", "origin"]).stdout.strip()
+    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", remote)
+    if not match:
+        raise click.ClickException(f"{repo.name}: origin {remote!r} is not a GitHub repo")
+    return match.group(1)
+
+
+def tag_commit(repo: Path, tag: str) -> str | None:
+    proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"],
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return proc.stdout.strip() or None
+
+
+@cli.command(epilog="\b\nExamples:\n  mcp-bridge release tg-cli --version 0.1.1\n"
+             "  CODESIGN_IDENTITY=... NOTARY_KEYCHAIN_PROFILE=... mcp-bridge release imessage-cli --version 0.3.1 --yes")
+@click.argument("name")
+@click.option("--version", "version", required=True, help="Release version (semver); the tag is v<version>.")
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=Path("dist"), show_default=True)
+@click.option("--wheels", "prebuilt", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Prebuilt wheels for mcpb.json build_wheels (all architectures); default builds for this Mac.")
+@click.option("--yes", is_flag=True, help="Tag, push and publish. Without it, only pack and show the plan.")
+def release(name: str, version: str, out: Path, prebuilt: Path | None, yes: bool) -> None:
+    """Pack a CLI as <repo>.mcpb and publish it as the asset of GitHub release v<version>.
+
+    The asset name never changes, so releases/latest/download/<repo>.mcpb always serves
+    the newest extension. The tag must not exist yet or already point at HEAD (CI runs
+    this on the tag it was triggered by); the tree must be clean so the tag matches the
+    packed files. Build steps in mcpb.json inherit the environment, e.g. CODESIGN_IDENTITY.
+    """
+    target = resolve(name)
+    repo, tag = target.repo, f"v{version}"
+    if run(["git", "-C", str(repo), "status", "--porcelain"]).stdout.strip():
+        raise click.ClickException(f"{repo.name} has uncommitted changes; commit them so {tag} matches the release")
+    head = run(["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
+    tagged = tag_commit(repo, tag)
+    if tagged and tagged != head:
+        raise click.ClickException(f"{tag} already points at {tagged[:12]}, not HEAD {head[:12]}")
+    slug = github_slug(repo)
+    bundle = build_bundle(target, version, out / f"{repo.name}.mcpb", prebuilt)
+    exists = subprocess.run(["gh", "release", "view", tag, "--repo", slug], capture_output=True,
+                            stdin=subprocess.DEVNULL).returncode == 0 if yes else None
+    steps = [] if tagged else [["git", "-C", str(repo), "tag", "-a", tag, "-m", tag],
+                               ["git", "-C", str(repo), "push", "origin", f"refs/tags/{tag}"]]
+    if exists:
+        steps.append(["gh", "release", "upload", tag, str(bundle), "--clobber", "--repo", slug])
+    else:
+        steps.append(["gh", "release", "create", tag, str(bundle), "--repo", slug, "--verify-tag", "--title", tag,
+                      "--notes", f"Claude Desktop extension: download {bundle.name}, double-click it, click Install."])
     click.echo(str(bundle))
+    if not yes:
+        for step in steps:
+            click.echo("would run: " + " ".join(step))
+        click.echo("dry run: pass --yes to tag and publish")
+        return
+    for step in steps:
+        run(step)
+    click.echo(f"https://github.com/{slug}/releases/tag/{tag}")
 
 
 @cli.command("wheels", epilog="\b\nExamples:\n  mcp-bridge wheels whatsapp-cli-wa --out wheels/")

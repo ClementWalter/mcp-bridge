@@ -86,6 +86,51 @@ pointing at a working `protoc`).
 Every manifest links the shared privacy policy (`privacy_policies`), which the
 extension directory requires.
 
+## Releases
+
+Every extension is published as `<repo>.mcpb` on its CLI's GitHub release, a
+name that never changes, so
+`https://github.com/ClementWalter/<repo>/releases/latest/download/<repo>.mcpb`
+always serves the newest one.
+
+**From CI.** A CLI repo calls the reusable workflow
+[`extension.yml`](.github/workflows/extension.yml), pinned by SHA:
+
+```yaml
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  extension:
+    permissions:
+      contents: write
+    uses: ClementWalter/mcp-bridge/.github/workflows/extension.yml@<sha>
+    with:
+      launcher: bin/tg          # the file the extension runs
+      bridge-ref: <sha>         # same SHA
+      siblings: milibris-cli    # optional: repos checked out next to the CLI
+```
+
+Pushing a tag `vX.Y.Z` packs version `X.Y.Z` on a `macos-15` runner and creates
+or updates the release. When `mcpb.json` has `build_wheels`, the wheels are first
+built on `macos-15` (arm64) and `macos-15-intel` (x86_64), so the extension
+serves both kinds of Mac.
+
+**From this Mac.** An extension whose build must be signed with a key that stays
+here (imessage-cli's notarized helper) is released locally:
+
+```bash
+mcp-bridge release imessage-cli --version 0.3.1          # dry run: packs, shows the plan
+CODESIGN_IDENTITY="Developer ID Application: ..." NOTARY_KEYCHAIN_PROFILE=... \
+  mcp-bridge release imessage-cli --version 0.3.1 --yes  # tag v0.3.1, push it, publish
+```
+
+`release` needs a clean tree, tags `v<version>` at HEAD unless that tag already
+points there, and publishes with `gh`. The environment reaches `mcpb.json` build
+steps. CI runs the same command.
+
 ## Configuration
 
 | Variable             | Default                | Purpose                      |

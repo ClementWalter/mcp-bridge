@@ -1,0 +1,115 @@
+# Reusable extension release: on a v* tag of the calling CLI repo, pack it as a Claude
+# Desktop extension and publish <repo>.mcpb on the tag's GitHub release, so
+# releases/latest/download/<repo>.mcpb always serves the newest one. Callers pin this
+# file by commit SHA and pass the same SHA as bridge-ref.
+name: extension
+
+on:
+  workflow_call:
+    inputs:
+      launcher:
+        description: File the extension runs, relative to the CLI repo (e.g. bin/tg)
+        required: true
+        type: string
+      bridge-ref:
+        description: mcp-bridge commit to pack with (same SHA the caller pins this workflow at)
+        required: true
+        type: string
+      siblings:
+        description: Space-separated repos of the same owner checked out next to the CLI (mcpb.json include)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      wheels: ${{ steps.wheels.outputs.needed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: wheels
+        run: |
+          needed=false
+          if [ -f mcpb.json ] && [ "$(jq '.build_wheels // [] | length' mcpb.json)" != 0 ]; then needed=true; fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+
+  # One wheel per Mac architecture for requirements PyPI only ships as sdists.
+  wheels:
+    needs: plan
+    if: needs.plan.outputs.wheels == 'true'
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # The bridge keys an extension by the repo directory's name.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ${{ github.event.repository.name }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ClementWalter/mcp-bridge
+          ref: ${{ inputs.bridge-ref }}
+          path: .mcp-bridge
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      # Rust ships on the macOS images; protobuf brings the protoc that signal-protocol's build needs.
+      - run: brew install protobuf
+      - env:
+          LAUNCHER: ${{ github.event.repository.name }}/${{ inputs.launcher }}
+        run: |
+          export PROTOC="$(brew --prefix protobuf)/bin/protoc"
+          uv run --script .mcp-bridge/mcp_bridge.py wheels "$LAUNCHER" --out wheels
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.runner }}
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  release:
+    needs: [plan, wheels]
+    # Runs after the wheels, or without them when the CLI needs none; only for a version tag.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.plan.result == 'success' && needs.wheels.result != 'failure' }}
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ${{ github.event.repository.name }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ClementWalter/mcp-bridge
+          ref: ${{ inputs.bridge-ref }}
+          path: .mcp-bridge
+          persist-credentials: false
+      - name: Check out siblings
+        env:
+          SIBLINGS: ${{ inputs.siblings }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          for s in $SIBLINGS; do git clone --quiet --depth 1 "https://github.com/$OWNER/$s.git" "$s"; done
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - if: needs.plan.outputs.wheels == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheels-*
+          path: wheels
+          merge-multiple: true
+      - name: Pack and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAUNCHER: ${{ github.event.repository.name }}/${{ inputs.launcher }}
+          WHEELS: ${{ needs.plan.outputs.wheels }}
+        run: |
+          extra=()
+          if [ "$WHEELS" = true ]; then extra=(--wheels wheels); fi
+          uv run --script .mcp-bridge/mcp_bridge.py release "$LAUNCHER" --version "${GITHUB_REF_NAME#v}" --out dist "${extra[@]}" --yes

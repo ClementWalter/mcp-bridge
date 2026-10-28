@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters
 
@@ -429,6 +430,122 @@ def test_e2e_write_with_confirm_runs(demo):
 def test_e2e_unknown_argument_is_an_error(demo):
     result = with_client(demo, lambda c: c.call_tool("search", {"query": "x", "bogus": 1}))
     assert result.is_error is True
+
+
+# Logs every call, and answers `release view` as "not found" unless GH_STUB_RELEASE_EXISTS is set.
+GH_STUB = "\n".join([
+    "import os, sys",
+    "with open(os.environ['GH_STUB_LOG'], 'a') as f:",
+    "    f.write(' '.join(sys.argv[1:]) + '\\n')",
+    "sys.exit(1 if sys.argv[1:3] == ['release', 'view'] and not os.environ.get('GH_STUB_RELEASE_EXISTS') else 0)",
+]) + "\n"
+
+
+@pytest.fixture
+def releasable(demo, monkeypatch):
+    """The demo CLI committed, origin on GitHub for reads but pushing to a local bare repo, gh stubbed."""
+    repo = demo / "demo-cli"
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "test@example.com")
+    subprocess.run(["git", "init", "-q", "--bare", str(demo / "origin.git")], check=True)
+    for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"],
+                ["remote", "add", "origin", "git@github.com:someone/demo-cli.git"],
+                ["remote", "set-url", "--push", "origin", str(demo / "origin.git")]):
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+    stub_bin = demo / "stub-bin"
+    stub_bin.mkdir()
+    (stub_bin / "gh").write_text(f"#!{sys.executable}\n" + GH_STUB)
+    (stub_bin / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("GH_STUB_LOG", str(demo / "gh.log"))
+    (demo / "gh.log").write_text("")
+
+    def build_bundle(target, version, bundle, prebuilt=None):
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        bundle.write_bytes(b"zip")
+        return bundle
+
+    monkeypatch.setattr(mb, "build_bundle", build_bundle)
+    return demo
+
+
+def release(demo, *extra):
+    args = ["release", str(demo / "demo-cli" / "demo_cli.py"), "--version", "0.1.1", "--out", str(demo / "dist"), *extra]
+    return CliRunner().invoke(mb.cli, args)
+
+
+def head_of(repo):
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def test_release_names_the_asset_after_the_repo(releasable):
+    assert release(releasable).output.splitlines()[0] == str(releasable / "dist" / "demo-cli.mcpb")
+
+
+def test_release_dry_run_creates_no_tag(releasable):
+    release(releasable)
+    assert mb.tag_commit(releasable / "demo-cli", "v0.1.1") is None
+
+
+def test_release_dry_run_does_not_call_gh(releasable):
+    release(releasable)
+    assert (releasable / "gh.log").read_text() == ""
+
+
+def test_release_tags_head(releasable):
+    release(releasable, "--yes")
+    assert mb.tag_commit(releasable / "demo-cli", "v0.1.1") == head_of(releasable / "demo-cli")
+
+
+def test_release_pushes_the_tag(releasable):
+    release(releasable, "--yes")
+    assert mb.tag_commit(releasable / "origin.git", "v0.1.1") == head_of(releasable / "demo-cli")
+
+
+def test_release_creates_the_github_release_with_the_asset(releasable):
+    release(releasable, "--yes")
+    created = (releasable / "gh.log").read_text().splitlines()[-1]
+    assert created.startswith(f"release create v0.1.1 {releasable / 'dist' / 'demo-cli.mcpb'} --repo someone/demo-cli")
+
+
+def test_release_replaces_the_asset_of_an_existing_release(releasable, monkeypatch):
+    monkeypatch.setenv("GH_STUB_RELEASE_EXISTS", "1")
+    release(releasable, "--yes")
+    assert (releasable / "gh.log").read_text().splitlines()[-1] == (
+        f"release upload v0.1.1 {releasable / 'dist' / 'demo-cli.mcpb'} --clobber --repo someone/demo-cli")
+
+
+def test_release_reuses_a_tag_at_head(releasable):
+    subprocess.run(["git", "-C", str(releasable / "demo-cli"), "tag", "-a", "v0.1.1", "-m", "v0.1.1"], check=True)
+    assert release(releasable, "--yes").exit_code == 0
+
+
+def test_release_refuses_a_tag_elsewhere(releasable):
+    repo = releasable / "demo-cli"
+    subprocess.run(["git", "-C", str(repo), "tag", "-a", "v0.1.1", "-m", "v0.1.1"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "next"], check=True)
+    assert "already points at" in release(releasable, "--yes").output
+
+
+def test_release_refuses_a_dirty_tree(releasable):
+    (releasable / "demo-cli" / "demo_cli.py").write_text(DEMO + "# edited\n")
+    assert "uncommitted changes" in release(releasable, "--yes").output
+
+
+@pytest.mark.parametrize(
+    ("remote", "expected"),
+    [
+        ("git@github.com:someone/demo-cli.git", "someone/demo-cli"),
+        ("https://github.com/someone/demo-cli", "someone/demo-cli"),
+        ("https://github.com/someone/demo-cli.git", "someone/demo-cli"),
+    ],
+)
+def test_github_slug(demo, remote, expected):
+    repo = demo / "demo-cli"
+    for cmd in (["init", "-q"], ["remote", "add", "origin", remote]):
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+    assert mb.github_slug(repo) == expected
 
 
 if __name__ == "__main__":
