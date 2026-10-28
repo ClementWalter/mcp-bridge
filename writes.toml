@@ -48,7 +48,7 @@ local = ["set-host", "dump", "pdf"]
 local = ["documents download", "documents sync", "connect"]
 
 [notion-cli]
-outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment", "rewrite", "check", "resolve-discussion", "agents apply"]
+outward = ["append", "create", "update", "edit", "delete", "delete-block", "comment", "rewrite", "check", "resolve-discussion", "view", "agents apply"]
 local = ["cache clear", "auth-sync", "agents pull", "agents export", "connect"]
 read = ["resolve"]
 
