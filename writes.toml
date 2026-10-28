@@ -31,7 +31,7 @@ local = ["dump", "pdf", "page"]
 
 [gdrive-cli]
 outward = ["drive rename", "drive import", "sheets write", "sheets write-formula", "sheets batch-write", "sheets clear"]
-local = ["auth-sync", "drive download"]
+local = ["auth-sync", "drive download", "connect", "set-default"]
 read = ["pipeline pdf-to-table"]
 
 [laposte-cli]
