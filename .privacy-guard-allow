@@ -1,0 +1,2 @@
+# "\n\n@click.group()" in a test string reads as an email address.
+^n@click\.group$
