@@ -541,6 +541,14 @@ def stage(cli: Cli, build: Path, version: str) -> Path:
             continue
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(cli.repo / rel, dest / rel)
+    # Files the CLI imports from outside its repo (a sibling checkout); dest is relative to the
+    # staged CLI dir, source to the CLI repo.
+    for rel_dest, rel_src in overrides.get("include", {}).items():
+        src = (cli.repo / rel_src).resolve()
+        if not src.is_file():
+            raise click.ClickException(f"{cli.repo.name}/mcpb.json include: {rel_src} not found")
+        (dest / rel_dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest / rel_dest)
     for f in (BRIDGE, INTROSPECT, BRIDGE.parent / "writes.toml"):
         shutil.copy2(f, root / f.name)
     deps, cutoff = merged_dependencies(cli)
