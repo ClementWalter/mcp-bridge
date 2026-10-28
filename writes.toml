@@ -20,7 +20,8 @@ outward = ["mark"]
 local = ["download", "auth-sync", "link"]
 
 [email-cli]
-local = ["auth-sync"]
+local = ["auth-sync", "connect", "attachments"]
+read = ["connect-status"]
 
 [fbarchive-cli]
 local = ["import"]
