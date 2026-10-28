@@ -27,15 +27,21 @@ def load(launcher: Path) -> None:
 
 
 def root_group(repo: Path) -> click.Group:
-    """The repo's group that no other group lists as a subcommand, largest first."""
-    groups = {}
-    for module in list(sys.modules.values()):
-        path = getattr(module, "__file__", None)
-        if not path or not Path(path).resolve().is_relative_to(repo):
-            continue
-        for value in vars(module).values():
-            if isinstance(value, click.Group):
-                groups[id(value)] = value
+    """The root group in the launcher's namespace, else in any module under the repo.
+
+    The launcher wins so a sibling CLI shipped next to it (and imported by it)
+    cannot take over; a thin shim that only imports `main` falls back to the repo.
+    """
+    launcher = sys.modules["_mcp_bridge_target"]
+    groups = {id(v): v for v in vars(launcher).values() if isinstance(v, click.Group)}
+    if not groups:
+        for module in list(sys.modules.values()):
+            path = getattr(module, "__file__", None)
+            if not path or not Path(path).resolve().is_relative_to(repo):
+                continue
+            for value in vars(module).values():
+                if isinstance(value, click.Group):
+                    groups[id(value)] = value
     children = {id(sub) for g in groups.values() for sub in g.commands.values()}
     roots = [g for k, g in groups.items() if k not in children]
     if not roots:

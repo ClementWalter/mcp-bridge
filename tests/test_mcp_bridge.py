@@ -247,6 +247,19 @@ def test_filled_setting_is_kept(monkeypatch):
     assert os.environ["DEMO_KEY"] == "abc"
 
 
+def test_introspect_prefers_the_launchers_group_over_a_bigger_sibling(demo, monkeypatch):
+    repo = demo / "demo-cli"
+    (repo / "sibling.py").write_text(
+        "import click\n\n@click.group()\ndef cli():\n    pass\n\n"
+        + "".join(f"@cli.command()\ndef c{i}():\n    pass\n\n" for i in range(5))
+    )
+    script = repo / "demo_cli.py"
+    script.write_text(script.read_text().replace("import click\n", "import click\nimport sibling  # noqa: F401\n", 1))
+    monkeypatch.setattr(mb, "CACHE_DIR", demo / "cache")
+    commands = mb.introspect(mb.discover(demo / "bin")["demo-cli"])
+    assert sorted(c["path"][0] for c in commands) == ["login", "search", "send"]
+
+
 def test_render_marks_failure_as_error():
     assert mb.render(1, "", "boom").is_error is True
 
