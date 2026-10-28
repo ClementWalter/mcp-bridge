@@ -235,6 +235,18 @@ def test_skill_reads_description_that_is_not_valid_yaml(demo):
     assert mb.skill(mb.discover(demo / "bin")["demo-cli"])[0]["description"] == "Two models: a, b"
 
 
+def test_unfilled_setting_is_dropped(monkeypatch):
+    monkeypatch.setenv("DEMO_KEY", "${user_config.key}")
+    mb.drop_unfilled_settings()
+    assert "DEMO_KEY" not in os.environ
+
+
+def test_filled_setting_is_kept(monkeypatch):
+    monkeypatch.setenv("DEMO_KEY", "abc")
+    mb.drop_unfilled_settings()
+    assert os.environ["DEMO_KEY"] == "abc"
+
+
 def test_render_marks_failure_as_error():
     assert mb.render(1, "", "boom").is_error is True
 

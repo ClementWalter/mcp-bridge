@@ -12,7 +12,7 @@ local = ["export-likes", "download", "auth-sync"]
 
 [ecoledirecte-cli]
 outward = ["mark"]
-local = ["download", "auth-sync"]
+local = ["download", "auth-sync", "link"]
 
 [email-cli]
 local = ["auth-sync"]
@@ -43,7 +43,7 @@ local = ["cache clear", "auth-sync", "agents pull"]
 
 [one-conv-cli]
 outward = ["live join", "live leave", "live stop"]
-local = ["chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull", "tune cloud pull", "live pull", "hr sync"]
+local = ["chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull", "tune cloud pull", "hr sync"]
 
 [oz-audits-cli]
 outward = ["submit"]

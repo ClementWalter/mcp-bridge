@@ -394,7 +394,15 @@ def build_server(cli: Cli) -> Server:
     return Server(cli.name, instructions=instructions(cli), on_list_tools=list_tools, on_call_tool=call_tool)
 
 
+def drop_unfilled_settings() -> None:
+    """An optional extension setting left empty reaches us as its literal `${user_config.x}` template."""
+    for key, value in list(os.environ.items()):
+        if re.fullmatch(r"\$\{user_config\.[^}]*\}", value):
+            del os.environ[key]
+
+
 async def serve_stdio(cli: Cli) -> None:
+    drop_unfilled_settings()
     server = build_server(cli)
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
