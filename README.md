@@ -49,6 +49,35 @@ them; each server can then be switched off on its own in Settings.
 Run `mcp-bridge install --yes` again after adding a CLI, and `mcp-bridge audit`
 after adding a write command to one.
 
+## Extensions for people without a terminal
+
+`mcp-bridge pack <cli> --version X.Y.Z` builds a Claude Desktop extension
+(`.mcpb`): double-click it, click Install, and the CLI's tools are in Claude.
+Nothing else needs installing: Claude Desktop brings `uv`, which installs
+Python and the locked dependencies.
+
+The extension holds the bridge, the CLI's tracked files (no tests, no CI), a
+`pyproject.toml` merging the CLI's exact pins with the bridge's, its `uv.lock`,
+and a `manifest.json` (server type `uv`). Every extension runs Python
+3.11 (`.python-version`), so a fresh install cannot pick a newer Python that
+some pinned dependency has no wheel for.
+
+A CLI customizes its extension with an optional `mcpb.json`:
+
+| Key                | Purpose                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `display_name`     | Name shown in Claude Desktop                                  |
+| `description`      | One-line summary                                              |
+| `long_description` | Setup steps shown on the extension page                       |
+| `platforms`        | `darwin`, `linux`, `win32` (default `darwin`)                 |
+| `user_config`      | Settings fields (MCPB format); `sensitive` ones are masked    |
+| `env`              | Environment for the CLI, e.g. `"${user_config.api_hash}"`     |
+| `build_wheels`     | Requirements PyPI has no wheel for; built here and shipped    |
+| `icon`             | Path to a PNG in the repo                                     |
+
+`build_wheels` compiles for this machine's architecture only (whatsapp-cli's
+`signal-protocol` needs Rust and `PROTOC` pointing at a working `protoc`).
+
 ## Configuration
 
 | Variable             | Default                | Purpose                      |

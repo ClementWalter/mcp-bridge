@@ -16,6 +16,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -240,6 +241,81 @@ def test_render_marks_failure_as_error():
 
 def test_render_truncates_long_output():
     assert len(mb.render(0, "x" * (mb.MAX_OUTPUT + 10), "").content[0].text) < mb.MAX_OUTPUT + 200
+
+
+@pytest.mark.parametrize(
+    ("requirement", "expected"),
+    [
+        ("click==8.4.1", "click"),
+        ("qrcode[pil]==8.2", "qrcode"),
+        ("pyobjc-framework-Contacts==12.1; sys_platform == 'darwin'", "pyobjc-framework-contacts"),
+        ("Signal_Protocol==0.2.2", "signal-protocol"),
+    ],
+)
+def test_dist_name(requirement, expected):
+    assert mb.dist_name(requirement) == expected
+
+
+def test_script_header_reads_dependencies(demo):
+    assert mb.script_header(demo / "demo-cli" / "demo_cli.py")["dependencies"] == ["click==8.4.1"]
+
+
+def test_merged_dependencies_keep_the_cli_pin(demo):
+    script = demo / "demo-cli" / "demo_cli.py"
+    script.write_text(script.read_text().replace("click==8.4.1", "click==8.3.3"))
+    deps, _ = mb.merged_dependencies(mb.discover(demo / "bin")["demo-cli"])
+    assert [d for d in deps if mb.dist_name(d) == "click"] == ["click==8.3.3"]
+
+
+def test_merged_dependencies_add_the_bridge_runtime(demo):
+    deps, _ = mb.merged_dependencies(mb.discover(demo / "bin")["demo-cli"])
+    assert {"mcp", "pyyaml"} <= {mb.dist_name(d) for d in deps}
+
+
+def test_bundled_cli_runs_with_this_interpreter(demo):
+    assert mb.resolve(str(demo / "demo-cli" / "demo_cli.py"), bundled=True).python == sys.executable
+
+
+def test_bundled_launch_skips_uv(demo):
+    cli = mb.resolve(str(demo / "demo-cli" / "demo_cli.py"), bundled=True)
+    assert mb.launch(cli) == [sys.executable, str(cli.launcher)]
+
+
+@pytest.fixture
+def staged(demo, monkeypatch):
+    repo = demo / "demo-cli"
+    for cmd in (["init", "-q"], ["add", "."], ["remote", "add", "origin", "git@github.com:someone/demo-cli.git"]):
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+    (repo / "mcpb.json").write_text(json.dumps({"display_name": "Demo", "env": {"DEMO_KEY": "${user_config.key}"}}))
+    subprocess.run(["git", "-C", str(repo), "add", "mcpb.json"], check=True)
+    monkeypatch.setattr(mb, "CACHE_DIR", demo / "cache")
+    return mb.stage(mb.discover(demo / "bin")["demo-cli"], demo / "build", "1.2.3")
+
+
+def test_stage_serves_the_cli_bundled(staged):
+    args = json.loads((staged / "manifest.json").read_text())["server"]["mcp_config"]["args"]
+    assert args[-3:] == ["serve", "--bundled", "cli/demo-cli/demo_cli.py"]
+
+
+def test_stage_applies_overrides(staged):
+    assert json.loads((staged / "manifest.json").read_text())["display_name"] == "Demo"
+
+
+def test_stage_maps_settings_to_env(staged):
+    env = json.loads((staged / "manifest.json").read_text())["server"]["mcp_config"]["env"]
+    assert env == {"DEMO_KEY": "${user_config.key}"}
+
+
+def test_stage_pins_python(staged):
+    assert (staged / ".python-version").read_text() == mb.BUNDLE_PYTHON + "\n"
+
+
+def test_stage_locks_dependencies(staged):
+    assert (staged / "uv.lock").is_file()
+
+
+def test_stage_leaves_out_overrides_file(staged):
+    assert not (staged / "cli" / "demo-cli" / "mcpb.json").exists()
 
 
 def test_e2e_lists_tools(demo):

@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -73,6 +74,8 @@ class Cli:
     name: str
     launcher: Path
     repo: Path
+    # Interpreter that already has the CLI's dependencies (a packed extension); None runs it through uv.
+    python: str | None = None
 
     @property
     def writes_key(self) -> str:
@@ -106,11 +109,11 @@ def discover(bin_dir: Path = BIN_DIR) -> dict[str, Cli]:
     return dict(sorted(out.items()))
 
 
-def resolve(name_or_path: str) -> Cli:
+def resolve(name_or_path: str, bundled: bool = False) -> Cli:
     path = Path(name_or_path).expanduser()
     if path.is_file():
         target = path.resolve()
-        return Cli(repo_of(target).name, target, repo_of(target))
+        return Cli(repo_of(target).name, target, repo_of(target), sys.executable if bundled else None)
     clis = discover()
     if name_or_path not in clis:
         raise click.UsageError(f"unknown CLI {name_or_path!r}; run `mcp-bridge list` to see the known ones")
@@ -144,8 +147,10 @@ def introspect(cli: Cli) -> list[dict]:
         cached = json.loads(cache.read_text())
         if cached.get("stamp") == stamp:
             return cached["commands"]
-    run(["uv", "sync", "-q", "--script", str(cli.launcher)])
-    python = run(["uv", "python", "find", "--script", str(cli.launcher)]).stdout.strip()
+    python = cli.python
+    if python is None:
+        run(["uv", "sync", "-q", "--script", str(cli.launcher)])
+        python = run(["uv", "python", "find", "--script", str(cli.launcher)]).stdout.strip()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "tree.json"
         run([python, "-I", str(INTROSPECT), str(cli.launcher), str(out)])
@@ -319,12 +324,16 @@ def render(returncode: int, stdout: str, stderr: str) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=text or "(no output)")], is_error=bool(returncode))
 
 
+def launch(cli: Cli) -> list[str]:
+    if cli.python:
+        return [cli.python, str(cli.launcher)]
+    return ["uv", "run", "-q", "--script", str(cli.launcher)]
+
+
 async def execute(cli: Cli, args: list[str]) -> types.CallToolResult:
     try:
         with anyio.fail_after(TIMEOUT):
-            proc = await anyio.run_process(
-                ["uv", "run", "-q", "--script", str(cli.launcher), *args], check=False, stdin=subprocess.DEVNULL
-            )
+            proc = await anyio.run_process(launch(cli) + args, check=False, stdin=subprocess.DEVNULL)
     except TimeoutError:
         return render(124, "", f"timed out after {TIMEOUT:.0f}s (MCP_BRIDGE_TIMEOUT)")
     return render(proc.returncode, proc.stdout.decode(errors="replace"), proc.stderr.decode(errors="replace"))
@@ -420,6 +429,143 @@ def merge_config(config: dict, clis: dict[str, Cli]) -> tuple[dict, list[str], l
     return {**config, "mcpServers": servers}, sorted(clis), stale
 
 
+MCPB = "@anthropic-ai/mcpb@2.1.2"
+# One interpreter for every extension: a fresh uv picks the newest Python, which can
+# lack wheels for a pinned dependency and fall back to a source build the user cannot run.
+BUNDLE_PYTHON = "3.11"
+# Not shipped in an extension: dev tooling, CI, tests.
+PACK_SKIP = re.compile(r"^(tests/|\.github/|\.pre-commit-config\.yaml$|\.privacy-guard-allow$|\.gitignore$|uv\.lock$|mcpb\.json$)")
+
+
+def script_header(path: Path) -> dict:
+    """The PEP 723 block of a script, parsed."""
+    match = re.search(r"^# /// script\n((?:#.*\n)+?)# ///$", path.read_text(), flags=re.M)
+    if not match:
+        return {}
+    return tomllib.loads("".join(line[2:] + "\n" for line in match.group(1).splitlines()))
+
+
+def dist_name(requirement: str) -> str:
+    return re.split(r"[\s\[=<>!~;]", requirement, maxsplit=1)[0].lower().replace("_", "-")
+
+
+def cli_dependencies(cli: Cli) -> tuple[list[str], str | None]:
+    """The CLI's pinned requirements and exclude-newer cutoff, from pyproject.toml or the launcher."""
+    pyproject = cli.repo / "pyproject.toml"
+    if pyproject.is_file():
+        project = tomllib.loads(pyproject.read_text())
+        deps = list(project["project"].get("dependencies", []))
+        deps += [f"{d}; sys_platform == 'darwin'" if ";" not in d else d
+                 for d in project["project"].get("optional-dependencies", {}).get("macos", [])]
+        return deps, project.get("tool", {}).get("uv", {}).get("exclude-newer")
+    header = script_header(cli.launcher)
+    return list(header.get("dependencies", [])), header.get("tool", {}).get("uv", {}).get("exclude-newer")
+
+
+def merged_dependencies(cli: Cli) -> tuple[list[str], str | None]:
+    """The CLI's pins plus the bridge's; the CLI's pin wins for a package both use."""
+    cli_deps, cutoff = cli_dependencies(cli)
+    taken = {dist_name(d) for d in cli_deps}
+    bridge = [d for d in script_header(BRIDGE)["dependencies"] if dist_name(d) not in taken]
+    return cli_deps + bridge, cutoff
+
+
+def build_wheels(requirements: list[str], dest: Path) -> dict[str, str]:
+    """Build wheels for requirements PyPI only ships as sdists here; package name -> wheel path."""
+    dest.mkdir(parents=True, exist_ok=True)
+    built = {}
+    for req in requirements:
+        before = set(dest.iterdir())
+        run(["uv", "run", "--no-project", "--python", BUNDLE_PYTHON, "--with", "pip==25.3", "python", "-m", "pip",
+             "wheel", "--no-deps", "--no-binary", dist_name(req), "--wheel-dir", str(dest), req])
+        (wheel,) = set(dest.iterdir()) - before
+        built[dist_name(req)] = f"wheels/{wheel.name}"
+    return built
+
+
+def toml_list(items: list[str]) -> str:
+    return "[\n" + "".join(f"    {json.dumps(i)},\n" for i in items) + "]"
+
+
+def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict:
+    meta, _ = skill(cli)
+    summary = " ".join(str(meta.get("description", "")).split())
+    remote = run(["git", "-C", str(cli.repo), "remote", "get-url", "origin"]).stdout.strip()
+    url = re.sub(r"^git@github\.com:", "https://github.com/", remote).removesuffix(".git")
+    commands = exposed(introspect(cli))
+    out = {
+        "manifest_version": "0.4",
+        "name": cli.repo.name,
+        "display_name": overrides.get("display_name", cli.repo.name),
+        "version": version,
+        "description": overrides.get("description", summary.split(". ")[0][:200]),
+        "long_description": overrides.get("long_description", summary),
+        "author": {"name": "Clément Walter", "url": "https://github.com/ClementWalter"},
+        "repository": {"type": "git", "url": url},
+        "homepage": url,
+        "server": {
+            "type": "uv",
+            "entry_point": "mcp_bridge.py",
+            "mcp_config": {
+                "command": "uv",
+                # `python mcp_bridge.py`, not `uv run mcp_bridge.py`: the latter would read the
+                # script's own PEP 723 header and build a second environment without the CLI.
+                "args": ["run", "--directory", "${__dirname}", "--frozen", "python", "mcp_bridge.py",
+                         "serve", "--bundled", rel_launcher],
+                "env": overrides.get("env", {}),
+            },
+        },
+        "tools": [{"name": GUIDE, "description": "How to use these tools well."}] + [
+            {"name": tool_name(c["path"]), "description": (c["help"].strip().splitlines() or [""])[0]} for c in commands
+        ],
+        "compatibility": {"platforms": overrides.get("platforms", ["darwin"]), "runtimes": {"python": ">=3.11"}},
+    }
+    if overrides.get("user_config"):
+        out["user_config"] = overrides["user_config"]
+    if (cli.repo / "LICENSE").is_file():
+        out["license"] = overrides.get("license", "MIT")
+    return out
+
+
+def stage(cli: Cli, build: Path, version: str) -> Path:
+    """Lay out an extension directory: bridge, the CLI's tracked files, pyproject, lock, manifest."""
+    overrides_file = cli.repo / "mcpb.json"
+    overrides = json.loads(overrides_file.read_text()) if overrides_file.is_file() else {}
+    root = build / cli.name
+    if root.exists():
+        shutil.rmtree(root)
+    dest = root / "cli" / cli.repo.name
+    for rel in run(["git", "-C", str(cli.repo), "ls-files"]).stdout.splitlines():
+        # Launcher links are skipped: the extension runs the target file directly, and zips drop links.
+        if PACK_SKIP.match(rel) or (cli.repo / rel).is_symlink() or not (cli.repo / rel).is_file():
+            continue
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cli.repo / rel, dest / rel)
+    for f in (BRIDGE, INTROSPECT, BRIDGE.parent / "writes.toml"):
+        shutil.copy2(f, root / f.name)
+    deps, cutoff = merged_dependencies(cli)
+    pyproject = f'[project]\nname = "{cli.name}-mcpb"\nversion = "{version}"\nrequires-python = "=={BUNDLE_PYTHON}.*"\n'
+    pyproject += f"dependencies = {toml_list(deps)}\n"
+    if cutoff:
+        pyproject += f'\n[tool.uv]\nexclude-newer = "{cutoff}"\n'
+    wheels = build_wheels(overrides.get("build_wheels", []), root / "wheels")
+    if wheels:
+        machine = platform.machine()
+        pyproject += "\n[tool.uv.sources]\n" + "".join(
+            f'{name} = {{ path = "{path}", marker = "sys_platform == \'darwin\' and platform_machine == \'{machine}\'" }}\n'
+            for name, path in wheels.items()
+        )
+    (root / "pyproject.toml").write_text(pyproject)
+    (root / ".python-version").write_text(BUNDLE_PYTHON + "\n")
+    run(["uv", "lock", "--directory", str(root)])
+    rel_launcher = f"cli/{cli.repo.name}/{cli.launcher.relative_to(cli.repo)}"
+    (root / "manifest.json").write_text(json.dumps(manifest(cli, version, rel_launcher, overrides), indent=2, ensure_ascii=False) + "\n")
+    icon = overrides.get("icon")
+    if icon:
+        shutil.copy2(cli.repo / icon, root / Path(icon).name)
+    return root
+
+
 @click.group(epilog="\b\nExamples:\n  mcp-bridge list\n  mcp-bridge tools notion-cli\n  mcp-bridge install --yes")
 def cli() -> None:
     """Serve the `<name>-cli` tools over MCP for Claude Desktop and Cowork."""
@@ -506,9 +652,24 @@ def call(name: str, tool_name_: str, arguments: str) -> None:
 
 @cli.command(epilog="\b\nExamples:\n  mcp-bridge serve notion-cli\n  mcp-bridge serve ~/Documents/tg-cli/tg_cli.py")
 @click.argument("name")
-def serve(name: str) -> None:
+@click.option("--bundled", is_flag=True, help="The CLI's dependencies are in this interpreter (a packed extension).")
+def serve(name: str, bundled: bool) -> None:
     """Run the stdio MCP server for one CLI (what Claude Desktop launches)."""
-    asyncio.run(serve_stdio(resolve(name)))
+    asyncio.run(serve_stdio(resolve(name, bundled)))
+
+
+@cli.command(epilog="\b\nExamples:\n  mcp-bridge pack imessage-cli --version 0.1.0\n  mcp-bridge pack whatsapp-cli-wa --version 0.1.0 --out dist")
+@click.argument("name")
+@click.option("--version", "version", required=True, help="Extension version (semver).")
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=Path("dist"), show_default=True)
+def pack(name: str, version: str, out: Path) -> None:
+    """Build a Claude Desktop extension (.mcpb) that serves one CLI, installable without a terminal."""
+    target = resolve(name)
+    root = stage(target, out / "build", version)
+    bundle = out / f"{target.name}-{version}.mcpb"
+    run(["npx", "-y", MCPB, "validate", str(root / "manifest.json")])
+    run(["npx", "-y", MCPB, "pack", str(root), str(bundle)])
+    click.echo(str(bundle))
 
 
 @cli.command(epilog="\b\nExamples:\n  mcp-bridge install\n  mcp-bridge install --yes")

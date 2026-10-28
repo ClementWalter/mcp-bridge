@@ -60,8 +60,8 @@ outward = ["send", "draft", "draft-delete", "upload", "dm-upload", "canvas-edit"
 local = ["download", "auth-sync", "default", "refresh"]
 
 [tg-cli]
-local = ["download", "auth-sync"]
+local = ["download", "auth-sync", "link"]
 
 [whatsapp-cli]
 outward = ["send"]
-local = ["import-contacts", "download", "pull", "sync", "setup", "auth-sync"]
+local = ["import-contacts", "download", "pull", "sync", "setup", "auth-sync", "link"]
