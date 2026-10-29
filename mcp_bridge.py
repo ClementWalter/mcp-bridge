@@ -169,6 +169,25 @@ def exposed(commands: list[dict], bundled: bool = False) -> list[dict]:
     return [c for c in commands if not c["hidden"] and not excluded & set(c["path"])]
 
 
+def allowed(commands: list[dict], paths: list[str] | None) -> list[dict]:
+    """The commands mcpb.json `tools` lists (space-separated paths), or all when it lists none."""
+    if not paths:
+        return commands
+    by_path = {" ".join(c["path"]): c for c in commands}
+    missing = [p for p in paths if p not in by_path]
+    if missing:
+        raise click.ClickException(f"mcpb.json tools: no served command {', '.join(map(repr, missing))}")
+    return [by_path[p] for p in paths]
+
+
+def shipped_tools() -> set[str]:
+    """Tool names the extension's manifest declares; a packed bridge serves only those."""
+    manifest_file = BRIDGE.parent / "manifest.json"
+    if not manifest_file.is_file():
+        raise click.ClickException(f"{manifest_file} missing: a bundled server runs from a packed extension")
+    return {t["name"] for t in json.loads(manifest_file.read_text())["tools"]}
+
+
 def tool_name(path: list[str]) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", "_".join(path))[:64]
 
@@ -379,10 +398,14 @@ def guide_tool(cli: Cli) -> types.Tool:
 
 def build_server(cli: Cli) -> Server:
     # A CLI command named like the guide would be shadowed by it.
+    bundled = cli.python is not None
     commands = {
-        tool_name(c["path"]): c for c in exposed(introspect(cli), bundled=cli.python is not None)
+        tool_name(c["path"]): c for c in exposed(introspect(cli), bundled=bundled)
         if tool_name(c["path"]) != GUIDE
     }
+    if bundled:
+        declared = shipped_tools()
+        commands = {name: c for name, c in commands.items() if name in declared}
 
     async def list_tools(ctx, params) -> types.ListToolsResult:
         return types.ListToolsResult(tools=[guide_tool(cli), *(tool(cli.writes_key, c) for c in commands.values())])
@@ -446,8 +469,8 @@ def merge_config(config: dict, clis: dict[str, Cli]) -> tuple[dict, list[str], l
 
 
 MCPB = "@anthropic-ai/mcpb@2.1.2"
-# One interpreter for every extension: a fresh uv picks the newest Python, which can
-# lack wheels for a pinned dependency and fall back to a source build the user cannot run.
+# One pinned interpreter per extension (mcpb.json `python` overrides it): a fresh uv picks the
+# newest Python, which can lack wheels for a pinned dependency and fall back to a source build.
 BUNDLE_PYTHON = "3.11"
 PRIVACY_POLICY = "https://clementwalter.github.io/claude-extensions/privacy/"
 # Not shipped in an extension: dev tooling, CI, tests.
@@ -487,13 +510,13 @@ def merged_dependencies(cli: Cli) -> tuple[list[str], str | None]:
     return cli_deps + bridge, cutoff
 
 
-def build_wheels(requirements: list[str], dest: Path) -> None:
+def build_wheels(requirements: list[str], dest: Path, python: str = BUNDLE_PYTHON) -> None:
     """Build, for this machine, wheels of requirements PyPI only ships as sdists."""
     dest.mkdir(parents=True, exist_ok=True)
     for req in requirements:
         # uv's own single-architecture Python: a python.org framework build tags the wheel
         # universal2 although it is compiled for this machine only.
-        run(["uv", "run", "--no-project", "--managed-python", "--python", BUNDLE_PYTHON, "--with", "pip==25.3", "python", "-m", "pip",
+        run(["uv", "run", "--no-project", "--managed-python", "--python", python, "--with", "pip==25.3", "python", "-m", "pip",
              "wheel", "--no-deps", "--no-binary", dist_name(req), "--wheel-dir", str(dest), req])
 
 
@@ -525,7 +548,7 @@ def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict
     summary = " ".join(str(meta.get("description", "")).split())
     remote = run(["git", "-C", str(cli.repo), "remote", "get-url", "origin"]).stdout.strip()
     url = re.sub(r"^git@github\.com:", "https://github.com/", remote).removesuffix(".git")
-    commands = exposed(introspect(cli), bundled=True)
+    commands = allowed(exposed(introspect(cli), bundled=True), overrides.get("tools"))
     out = {
         "manifest_version": "0.4",
         "name": cli.repo.name,
@@ -552,7 +575,7 @@ def manifest(cli: Cli, version: str, rel_launcher: str, overrides: dict) -> dict
         "tools": [{"name": GUIDE, "description": "How to use these tools well."}] + [
             {"name": tool_name(c["path"]), "description": (c["help"].strip().splitlines() or [""])[0]} for c in commands
         ],
-        "compatibility": {"platforms": overrides.get("platforms", ["darwin"]), "runtimes": {"python": ">=3.11"}},
+        "compatibility": {"platforms": overrides.get("platforms", ["darwin"]), "runtimes": {"python": f">={overrides.get('python', BUNDLE_PYTHON)}"}},
     }
     if overrides.get("user_config"):
         out["user_config"] = overrides["user_config"]
@@ -601,7 +624,8 @@ def stage(cli: Cli, build: Path, version: str, prebuilt: Path | None = None) -> 
     for f in (BRIDGE, INTROSPECT, BRIDGE.parent / "writes.toml"):
         shutil.copy2(f, root / f.name)
     deps, cutoff = merged_dependencies(cli)
-    pyproject = f'[project]\nname = "{cli.name}-mcpb"\nversion = "{version}"\nrequires-python = "=={BUNDLE_PYTHON}.*"\n'
+    python = overrides.get("python", BUNDLE_PYTHON)
+    pyproject = f'[project]\nname = "{cli.name}-mcpb"\nversion = "{version}"\nrequires-python = "=={python}.*"\n'
     pyproject += f"dependencies = {toml_list(deps)}\n"
     if cutoff:
         pyproject += f'\n[tool.uv]\nexclude-newer = "{cutoff}"\n'
@@ -614,10 +638,10 @@ def stage(cli: Cli, build: Path, version: str, prebuilt: Path | None = None) -> 
             for w in prebuilt.glob("*.whl"):
                 shutil.copy2(w, root / "wheels" / w.name)
         else:
-            build_wheels(needs_wheels, root / "wheels")
+            build_wheels(needs_wheels, root / "wheels", python)
         pyproject += "\n[tool.uv.sources]\n" + wheel_sources(needs_wheels, root / "wheels")
     (root / "pyproject.toml").write_text(pyproject)
-    (root / ".python-version").write_text(BUNDLE_PYTHON + "\n")
+    (root / ".python-version").write_text(python + "\n")
     run(["uv", "lock", "--directory", str(root)])
     rel_launcher = f"cli/{cli.repo.name}/{cli.launcher.relative_to(cli.repo)}"
     (root / "manifest.json").write_text(json.dumps(manifest(cli, version, rel_launcher, overrides), indent=2, ensure_ascii=False) + "\n")
@@ -807,8 +831,8 @@ def wheels_cmd(name: str, out: Path) -> None:
     """Build, for this Mac's architecture, the wheels a CLI's mcpb.json lists in build_wheels."""
     target = resolve(name)
     overrides_file = target.repo / "mcpb.json"
-    needed = json.loads(overrides_file.read_text()).get("build_wheels", []) if overrides_file.is_file() else []
-    build_wheels(needed, out)
+    overrides = json.loads(overrides_file.read_text()) if overrides_file.is_file() else {}
+    build_wheels(overrides.get("build_wheels", []), out, overrides.get("python", BUNDLE_PYTHON))
     for w in sorted(out.glob("*.whl")):
         click.echo(str(w))
 

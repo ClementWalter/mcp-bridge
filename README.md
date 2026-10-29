@@ -58,9 +58,9 @@ Python and the locked dependencies.
 
 The extension holds the bridge, the CLI's tracked files (no tests, no CI), a
 `pyproject.toml` merging the CLI's exact pins with the bridge's, its `uv.lock`,
-and a `manifest.json` (server type `uv`). Every extension runs Python
-3.11 (`.python-version`), so a fresh install cannot pick a newer Python that
-some pinned dependency has no wheel for.
+and a `manifest.json` (server type `uv`). Every extension runs a pinned Python,
+3.11 unless `mcpb.json` sets `python` (`.python-version`), so a fresh install
+cannot pick a newer Python that some pinned dependency has no wheel for.
 
 A CLI customizes its extension with an optional `mcpb.json`:
 
@@ -76,12 +76,18 @@ A CLI customizes its extension with an optional `mcpb.json`:
 | `icon`             | Path to a PNG in the repo                                     |
 | `include`          | `{"dest": "../source"}`: files from outside the repo to ship  |
 | `build`            | `{"command": [...], "include": [...]}`: run in the repo, ship its outputs |
+| `python`           | Interpreter version the extension pins (default `3.11`)      |
+| `tools`            | Command paths to serve, e.g. `["cloud chats", "cloud read"]`; default all |
 
 `build_wheels` compiles for this machine's architecture unless `pack --wheels
 DIR` is given prebuilt wheels; `mcp-bridge wheels <cli> --out DIR` builds them,
 so CI runs it on an Apple Silicon and an Intel runner and packs one extension
 that serves both (whatsapp-cli's `signal-protocol` needs Rust and `PROTOC`
 pointing at a working `protoc`).
+
+`tools` keeps a large CLI's extension to the commands a person needs: the
+manifest lists only those, and the packed server serves only what its manifest
+declares. A path that names no served command fails the pack.
 
 Every manifest links the shared privacy policy (`privacy_policies`), which the
 extension directory requires.

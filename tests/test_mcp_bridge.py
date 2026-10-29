@@ -403,6 +403,47 @@ def test_stage_leaves_out_overrides_file(staged):
     assert not (staged / "cli" / "demo-cli" / "mcpb.json").exists()
 
 
+def stage_with(demo, monkeypatch, overrides: dict) -> Path:
+    repo = demo / "demo-cli"
+    for cmd in (["init", "-q"], ["add", "."], ["remote", "add", "origin", "git@github.com:someone/demo-cli.git"]):
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+    (repo / "mcpb.json").write_text(json.dumps(overrides))
+    monkeypatch.setattr(mb, "CACHE_DIR", demo / "cache")
+    return mb.stage(mb.discover(demo / "bin")["demo-cli"], demo / "build", "1.0.0")
+
+
+def test_stage_pins_the_overridden_python(demo, monkeypatch):
+    root = stage_with(demo, monkeypatch, {"python": "3.12"})
+    assert (root / ".python-version").read_text() == "3.12\n"
+
+
+def test_stage_declares_the_overridden_runtime(demo, monkeypatch):
+    root = stage_with(demo, monkeypatch, {"python": "3.12"})
+    assert json.loads((root / "manifest.json").read_text())["compatibility"]["runtimes"] == {"python": ">=3.12"}
+
+
+def test_stage_lists_only_allowed_tools(demo, monkeypatch):
+    root = stage_with(demo, monkeypatch, {"tools": ["search"]})
+    assert [t["name"] for t in json.loads((root / "manifest.json").read_text())["tools"]] == [mb.GUIDE, "search"]
+
+
+def test_stage_rejects_a_tool_path_it_does_not_serve(demo, monkeypatch):
+    with pytest.raises(mb.click.ClickException, match="'nope'"):
+        stage_with(demo, monkeypatch, {"tools": ["nope"]})
+
+
+def test_bundled_server_serves_only_manifest_tools(demo, monkeypatch):
+    root = stage_with(demo, monkeypatch, {"tools": ["search"]})
+    env = {**os.environ, "MCP_BRIDGE_CACHE": str(demo / "cache")}
+    params = StdioServerParameters(command=sys.executable, cwd=str(root), env=env,
+                                   args=[str(root / "mcp_bridge.py"), "serve", "--bundled", "cli/demo-cli/demo_cli.py"])
+
+    async def go():
+        async with Client(params) as client:
+            return await client.list_tools()
+    assert sorted(t.name for t in asyncio.run(go()).tools) == ["search", "usage_guide"]
+
+
 def test_e2e_lists_tools(demo):
     tools = with_client(demo, lambda c: c.list_tools())
     assert sorted(t.name for t in tools.tools) == ["search", "send", "usage_guide"]
