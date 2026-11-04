@@ -48,6 +48,9 @@ outward = ["run", "tell"]
 [milibris-cli]
 local = ["set-host", "dump", "pdf"]
 
+[matera-cli]
+local = ["download", "sync", "ledger"]
+
 [myoralia-cli]
 local = ["documents download", "documents sync", "connect"]
 
