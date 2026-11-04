@@ -49,6 +49,7 @@ outward = ["run", "tell"]
 local = ["set-host", "dump", "pdf"]
 
 [matera-cli]
+read = ["connect"]
 local = ["download", "sync", "ledger"]
 
 [myoralia-cli]
