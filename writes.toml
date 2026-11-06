@@ -15,6 +15,10 @@ read = ["resolve"]
 outward = ["like", "unlike", "playlist-create", "playlist-add", "playlist-remove", "playlist-delete"]
 local = ["export-likes", "download", "auth-sync"]
 
+[doctolib-cli]
+read = ["connect"]
+local = ["download"]
+
 [ecoledirecte-cli]
 outward = ["mark"]
 local = ["download", "auth-sync", "link"]
