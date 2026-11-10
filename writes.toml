@@ -73,7 +73,7 @@ local = ["cloud chatgpt connect", "cloud claude connect", "cloud codex connect",
   "chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull",
   "tune cloud pull", "local feed", "live topic", "live control restore",
   "tune snapshot", "tune dataset", "tune label", "tune mood", "tune view", "tune synth", "tune train",
-  "tune eval", "tune probe"]
+  "tune eval", "tune probe", "live connectors add", "live connectors rm"]
 
 [oz-audits-cli]
 outward = ["submit"]
