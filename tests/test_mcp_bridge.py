@@ -598,3 +598,34 @@ def test_github_slug(demo, remote, expected):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def bridge_cli(demo, *args):
+    return CliRunner().invoke(mb.cli, [*args[:1], str(demo / "demo-cli" / "demo_cli.py"), *args[1:]])
+
+
+def test_catalog_lists_the_guide_first(demo):
+    assert json.loads(bridge_cli(demo, "catalog").output)["tools"][0]["name"] == mb.GUIDE
+
+
+def test_catalog_carries_the_instructions(demo):
+    assert "Demo CLI" in json.loads(bridge_cli(demo, "catalog").output)["instructions"]
+
+
+def test_catalog_keeps_to_the_extension_tools(demo):
+    (demo / "demo-cli" / "mcpb.json").write_text(json.dumps({"tools": ["search"]}))
+    names = [t["name"] for t in json.loads(bridge_cli(demo, "catalog").output)["tools"]]
+    assert names == [mb.GUIDE, "search"]
+
+
+def test_call_json_returns_the_tool_result(demo):
+    result = json.loads(bridge_cli(demo, "call", "search", '{"query": "cats"}', "--json").output)
+    assert json.loads(result["content"][0]["text"])["query"] == "cats"
+
+
+def test_call_json_reports_an_unknown_tool_as_an_error(demo):
+    assert json.loads(bridge_cli(demo, "call", "nope", "{}", "--json").output)["isError"] is True
+
+
+def test_call_json_serves_the_guide(demo):
+    assert "Use search" in json.loads(bridge_cli(demo, "call", mb.GUIDE, "{}", "--json").output)["content"][0]["text"]

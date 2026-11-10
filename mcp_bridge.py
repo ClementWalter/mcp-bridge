@@ -396,6 +396,35 @@ def guide_tool(cli: Cli) -> types.Tool:
     )
 
 
+def remote_commands(cli: Cli) -> dict[str, dict]:
+    """The commands a remote connector serves: those the CLI's extension ships (mcpb.json `tools`)."""
+    overrides_file = cli.repo / "mcpb.json"
+    overrides = json.loads(overrides_file.read_text()) if overrides_file.is_file() else {}
+    return {tool_name(c["path"]): c for c in allowed(exposed(introspect(cli)), overrides.get("tools"))
+            if tool_name(c["path"]) != GUIDE}
+
+
+def catalog(cli: Cli) -> dict:
+    """Everything a remote connector needs to list a CLI's tools without running it."""
+    commands = remote_commands(cli)
+    return {"name": cli.name, "instructions": instructions(cli),
+            "tools": [t.model_dump(by_alias=True, exclude_none=True)
+                      for t in (guide_tool(cli), *(tool(cli.writes_key, c) for c in commands.values()))]}
+
+
+async def dispatch(cli: Cli, commands: dict[str, dict], name: str, arguments: dict) -> types.CallToolResult:
+    """One tool call, as every transport (stdio server, remote relay, `call`) runs it."""
+    if name == GUIDE:
+        return render(0, skill(cli)[1], "")
+    cmd = commands.get(name)
+    if cmd is None:
+        return render(2, "", f"unknown tool {name!r}")
+    extra = unknown_arguments(cmd, arguments)
+    if extra:
+        return render(2, "", f"unknown arguments {extra}; see the tool's input schema")
+    return await execute(cli, argv(cmd, arguments))
+
+
 def build_server(cli: Cli) -> Server:
     # A CLI command named like the guide would be shadowed by it.
     bundled = cli.python is not None
@@ -411,16 +440,7 @@ def build_server(cli: Cli) -> Server:
         return types.ListToolsResult(tools=[guide_tool(cli), *(tool(cli.writes_key, c) for c in commands.values())])
 
     async def call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
-        if params.name == GUIDE:
-            return render(0, skill(cli)[1], "")
-        cmd = commands.get(params.name)
-        if cmd is None:
-            return render(2, "", f"unknown tool {params.name!r}")
-        arguments = params.arguments or {}
-        extra = unknown_arguments(cmd, arguments)
-        if extra:
-            return render(2, "", f"unknown arguments {extra}; see the tool's input schema")
-        return await execute(cli, argv(cmd, arguments))
+        return await dispatch(cli, commands, params.name, params.arguments or {})
 
     return Server(cli.name, instructions=instructions(cli), on_list_tools=list_tools, on_call_tool=call_tool)
 
@@ -720,20 +740,35 @@ def tools(name: str, as_json: bool) -> None:
 @click.argument("name")
 @click.argument("tool_name_")
 @click.argument("arguments", default="{}")
-def call(name: str, tool_name_: str, arguments: str) -> None:
-    """Run one tool exactly as the MCP server would, to debug a call."""
+@click.option("--json", "as_json", is_flag=True,
+              help="Print the MCP CallToolResult as JSON (what a remote connector relays); exit 0 even on a tool error.")
+def call(name: str, tool_name_: str, arguments: str, as_json: bool) -> None:
+    """Run one tool exactly as the MCP server would: to debug a call, or for a remote connector's relay."""
     target = resolve(name)
-    commands = {tool_name(c["path"]): c for c in exposed(introspect(target))}
-    if tool_name_ not in commands:
+    commands = remote_commands(target) if as_json else {
+        tool_name(c["path"]): c for c in exposed(introspect(target))}
+    if not as_json and tool_name_ not in commands and tool_name_ != GUIDE:
         raise click.UsageError(f"unknown tool {tool_name_!r}; run `mcp-bridge tools {name}`")
-    args = json.loads(arguments)
-    extra = unknown_arguments(commands[tool_name_], args)
-    if extra:
-        raise click.UsageError(f"unknown arguments {extra}")
-    result = asyncio.run(execute(target, argv(commands[tool_name_], args)))
+    try:
+        args = json.loads(arguments)
+    except ValueError:
+        raise click.UsageError("ARGUMENTS must be a JSON object") from None
+    if not isinstance(args, dict):
+        raise click.UsageError("ARGUMENTS must be a JSON object")
+    result = asyncio.run(dispatch(target, commands, tool_name_, args))
+    if as_json:
+        click.echo(json.dumps(result.model_dump(by_alias=True, exclude_none=True)))
+        return
     click.echo(result.content[0].text)
     if result.is_error:
         raise SystemExit(1)
+
+
+@cli.command("catalog", epilog="\b\nExamples:\n  mcp-bridge catalog deezer-cli")
+@click.argument("name")
+def catalog_cmd(name: str) -> None:
+    """Print a CLI's connector catalog as JSON: instructions and the tools its extension ships."""
+    click.echo(json.dumps(catalog(resolve(name))))
 
 
 @cli.command(epilog="\b\nExamples:\n  mcp-bridge serve notion-cli\n  mcp-bridge serve ~/Documents/tg-cli/tg_cli.py")
