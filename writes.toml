@@ -11,8 +11,8 @@
 read = ["check"]
 
 [caf-cli]
-# `courrier --save` also downloads; `send` takes --yes.
-local = ["download", "attestation", "releve", "courrier"]
+# `courrier --save` also downloads; `connect` launches the dedicated Chrome; `send` takes --yes.
+local = ["download", "attestation", "releve", "courrier", "connect"]
 
 [deezer-cli]
 read = ["resolve"]
