@@ -10,6 +10,10 @@
 [bluestar-cli]
 read = ["check"]
 
+[caf-cli]
+# `courrier --save` also downloads; `send` takes --yes.
+local = ["download", "attestation", "releve", "courrier"]
+
 [deezer-cli]
 read = ["resolve"]
 outward = ["like", "unlike", "playlist-create", "playlist-add", "playlist-remove", "playlist-delete"]
