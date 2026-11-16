@@ -104,3 +104,6 @@ local = ["import-contacts", "download", "pull", "sync", "setup", "auth-sync", "l
 
 [tchoupi-cli]
 local = ["pdf"]
+
+[x-cli]
+local = ["auth-sync"]
