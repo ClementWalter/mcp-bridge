@@ -43,8 +43,9 @@ local = ["auth-sync", "drive download", "connect", "set-default"]
 read = ["pipeline pdf-to-table"]
 
 [impots-cli]
-# `message` marks the opened threads read on the site and, with --save, writes files.
-local = ["download", "message"]
+# `message` marks the opened threads read on the site and, with --save, writes files;
+# `connect` launches the dedicated Chrome.
+local = ["download", "message", "connect"]
 
 [laposte-cli]
 outward = ["send"]
