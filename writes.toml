@@ -70,15 +70,12 @@ local = ["cache clear", "auth-sync", "agents pull", "agents export", "connect"]
 read = ["resolve"]
 
 [one-conv-cli]
-outward = ["live join", "live leave", "live stop", "live name", "live ack", "live summarize",
-  "live control node", "hr register", "hr ingest", "hr sync",
-  "tune cloud push", "tune cloud synth", "tune cloud train", "tune cloud dpo", "tune cloud eval",
-  "tune cloud probe", "tune cloud benchmark", "tune cloud nightly", "tune cloud clean"]
+# `live invite` mints a relay invite for another machine; `live name` publishes a name.
+outward = ["live join", "live stop", "live name", "live invite"]
+# `board get` saves a file; `local feed` moves read positions.
 local = ["cloud chatgpt connect", "cloud claude connect", "cloud codex connect", "cloud cowork connect",
   "chatgpt sync", "cloud chatgpt pull", "cloud claude pull", "cloud codex pull", "cloud cowork pull",
-  "tune cloud pull", "local feed", "live topic", "live control restore",
-  "tune snapshot", "tune dataset", "tune label", "tune mood", "tune view", "tune synth", "tune train",
-  "tune eval", "tune probe", "live connectors add", "live connectors rm"]
+  "local feed", "board get"]
 
 [oz-audits-cli]
 outward = ["submit"]
